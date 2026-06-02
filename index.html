@@ -82,6 +82,30 @@
     text-transform: uppercase;
   }
 
+  /* Indicateur de connexion Firebase */
+  .sync-indicator {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+    color: var(--text-dim);
+    padding: 6px 14px;
+    border-radius: 20px;
+    border: 1px solid var(--border);
+    background: var(--bg3);
+  }
+  .sync-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #555;
+    transition: background 0.3s;
+  }
+  .sync-dot.connected { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .sync-dot.syncing { background: var(--or); animation: pulse 1s infinite; }
+  .sync-dot.error { background: var(--rouge-vif); }
+
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
   nav { display: flex; gap: 4px; }
 
   .nav-btn {
@@ -630,11 +654,10 @@
   ::-webkit-scrollbar-thumb { background: var(--bg3); border-radius: 3px; }
   ::-webkit-scrollbar-thumb:hover { background: var(--rouge); }
 </style>
-
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
 
+<!-- HEADER -->
 <header>
   <div class="header-brand">
     <div class="header-logo">🏥</div>
@@ -649,8 +672,13 @@
     <button class="nav-btn" onclick="showPage('historique')">📋 Historique</button>
     <button class="nav-btn" onclick="showPage('gestion')">⚙️ Gestion</button>
   </nav>
+  <div class="sync-indicator">
+    <div class="sync-dot" id="sync-dot"></div>
+    <span id="sync-label">Connexion…</span>
+  </div>
 </header>
 
+<!-- PAGE: DASHBOARD -->
 <div id="page-dashboard" class="page active">
   <div class="page-header">
     <div>
@@ -686,11 +714,12 @@
   <div id="doctors-grid" class="doctors-grid">
     <div class="empty-state">
       <div class="icon">👨‍⚕️</div>
-      <p>Chargement des médecins en ligne...</p>
+      <p>Aucun médecin enregistré.<br>Rendez-vous dans l'onglet <strong>Gestion</strong> pour en ajouter.</p>
     </div>
   </div>
 </div>
 
+<!-- PAGE: SAISIE -->
 <div id="page-saisie" class="page">
   <div class="page-header">
     <div>
@@ -726,6 +755,7 @@
   </div>
 </div>
 
+<!-- PAGE: HISTORIQUE -->
 <div id="page-historique" class="page">
   <div class="page-header">
     <div>
@@ -771,6 +801,7 @@
   </table>
 </div>
 
+<!-- PAGE: GESTION -->
 <div id="page-gestion" class="page">
   <div class="page-header">
     <div>
@@ -779,6 +810,7 @@
   </div>
 
   <div class="gestion-grid">
+    <!-- Ajouter -->
     <div class="gestion-panel">
       <div class="panel-header">
         <span>➕</span>
@@ -797,6 +829,7 @@
       </div>
     </div>
 
+    <!-- Liste -->
     <div class="gestion-panel">
       <div class="panel-header">
         <span>👥</span>
@@ -811,9 +844,10 @@
     </div>
   </div>
 
+  <!-- Zone Danger -->
   <div class="danger-zone">
     <div class="danger-title">⚠ Zone de Réinitialisation</div>
-    <div class="danger-desc">Ces actions suppriment les données de la base cloud partagée pour tout le monde.</div>
+    <div class="danger-desc">Ces actions sont irréversibles. Toutes les données seront effacées définitivement.</div>
     <div style="display:flex;gap:12px;flex-wrap:wrap;">
       <button class="btn btn-danger" onclick="confirmReset('interventions')">🗑 Effacer tout l'historique</button>
       <button class="btn btn-danger" onclick="confirmReset('all')">💥 Réinitialisation complète</button>
@@ -821,6 +855,7 @@
   </div>
 </div>
 
+<!-- MODAL CONFIRM -->
 <div id="modal-overlay" class="modal-overlay">
   <div class="modal">
     <div class="modal-title" id="modal-title">Confirmer</div>
@@ -833,18 +868,112 @@
   </div>
 </div>
 
+<!-- TOAST -->
 <div id="toast"></div>
 
-<script>
-// ════════════════════════════════════════════════════
-// CONFIGURATION BASE DE DONNÉES CLOUD (À COMPLÉTER)
-// ════════════════════════════════════════════════════
-const SUPABASE_URL = "METTEZ_VOTRE_URL_ICI";
-const SUPABASE_KEY = "METTEZ_VOTRE_CLE_ANON_ICI";
+<!-- ════════════════════════════════════════════════════
+     FIREBASE SDK (chargé depuis CDN, pas besoin d'npm)
+════════════════════════════════════════════════════ -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import {
+  getFirestore, collection, doc,
+  onSnapshot, setDoc, deleteDoc, getDocs, writeBatch
+} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
-// Initialisation du client Supabase
-const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+// ════════════════════════════════════════════════════
+// CONFIG FIREBASE
+// ════════════════════════════════════════════════════
+const firebaseConfig = {
+  apiKey: "AIzaSyB5VKk9xyqVmtE4VXm7vTKgKf5veyRTK9E",
+  authDomain: "centre-hospitalier-nord.firebaseapp.com",
+  databaseURL: "https://centre-hospitalier-nord-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "centre-hospitalier-nord",
+  storageBucket: "centre-hospitalier-nord.firebasestorage.app",
+  messagingSenderId: "661693985812",
+  appId: "1:661693985812:web:70505df9fa368346fe2301"
+};
 
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+
+// ════════════════════════════════════════════════════
+// ÉTAT LOCAL (mis à jour en temps réel par Firebase)
+// ════════════════════════════════════════════════════
+let _doctors = [];
+let _interventions = [];
+
+function setSyncStatus(state) {
+  const dot = document.getElementById('sync-dot');
+  const label = document.getElementById('sync-label');
+  if (state === 'connected')  { dot.className = 'sync-dot connected'; label.textContent = 'Synchronisé'; }
+  if (state === 'syncing')    { dot.className = 'sync-dot syncing';   label.textContent = 'Sync…'; }
+  if (state === 'error')      { dot.className = 'sync-dot error';     label.textContent = 'Hors ligne'; }
+}
+
+// ─── Écoute en temps réel ─────────────────────────
+onSnapshot(collection(db, 'doctors'), snap => {
+  _doctors = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  setSyncStatus('connected');
+  refreshDashboard();
+  renderGestion();
+  populateDoctorSelect('saisie-doctor-select');
+  populateDoctorSelect('filter-doctor', true);
+}, () => setSyncStatus('error'));
+
+onSnapshot(collection(db, 'interventions'), snap => {
+  _interventions = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  setSyncStatus('connected');
+  refreshDashboard();
+  const activePage = document.querySelector('.page.active')?.id;
+  if (activePage === 'page-historique') renderHistorique();
+}, () => setSyncStatus('error'));
+
+// ════════════════════════════════════════════════════
+// FONCTIONS DE DONNÉES (remplacent localStorage)
+// ════════════════════════════════════════════════════
+function loadData() {
+  return { doctors: _doctors, interventions: _interventions };
+}
+
+async function saveDoctors_add(doc_) {
+  setSyncStatus('syncing');
+  await setDoc(doc(db, 'doctors', doc_.id), { name: doc_.name, specialty: doc_.specialty });
+}
+
+async function saveDoctors_remove(id) {
+  setSyncStatus('syncing');
+  await deleteDoc(doc(db, 'doctors', id));
+}
+
+async function saveIntervention(entry) {
+  setSyncStatus('syncing');
+  await setDoc(doc(db, 'interventions', entry.id), entry);
+}
+
+async function clearInterventions() {
+  setSyncStatus('syncing');
+  const snap = await getDocs(collection(db, 'interventions'));
+  const batch = writeBatch(db);
+  snap.docs.forEach(d => batch.delete(d.ref));
+  await batch.commit();
+}
+
+async function clearAll() {
+  setSyncStatus('syncing');
+  const [docSnap, intSnap] = await Promise.all([
+    getDocs(collection(db, 'doctors')),
+    getDocs(collection(db, 'interventions'))
+  ]);
+  const batch = writeBatch(db);
+  docSnap.docs.forEach(d => batch.delete(d.ref));
+  intSnap.docs.forEach(d => batch.delete(d.ref));
+  await batch.commit();
+}
+
+// ════════════════════════════════════════════════════
+// DATA TARIFS
+// ════════════════════════════════════════════════════
 const TARIFS = [
   {
     cat: "Soins", color: "rouge", icon: "🏥",
@@ -901,49 +1030,27 @@ const CAT_BADGE = {
   "Chirurgie":"badge-chirurgie","Tests & Formation":"badge-formation"
 };
 
-// Cache local synchronisé avec la base cloud
-let localData = { doctors: [], interventions: [] };
-
-// Chargement global depuis Supabase (Cloud)
-async function loadData() {
-  try {
-    const { data: doctors, error: errDoc } = await supabase.from('doctors').select('*').order('name');
-    const { data: interventions, error: errInt } = await supabase.from('interventions').select('*').order('date', { ascending: false });
-    
-    if (errDoc || errInt) throw errDoc || errInt;
-    
-    localData.doctors = doctors || [];
-    localData.interventions = interventions || [];
-  } catch (error) {
-    console.error("Erreur de synchronisation Cloud :", error);
-    showToast("Erreur de connexion avec la base cloud", "error");
-  }
-  return localData;
-}
-
-// ────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════
 // NAVIGATION
-// ────────────────────────────────────────────────────
-
-async function showPage(id) {
+// ════════════════════════════════════════════════════
+window.showPage = function(id) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('page-' + id).classList.add('active');
-  const btns = document.querySelectorAll('.nav-btn');
-  btns.forEach(b => { if(b.getAttribute('onclick').includes(id)) b.classList.add('active'); });
-  
-  if(id === 'dashboard') await refreshDashboard();
-  if(id === 'saisie') await initSaisie();
-  if(id === 'historique') { await populateHistoriqueFilters(); await renderHistorique(); }
-  if(id === 'gestion') await renderGestion();
+  document.querySelectorAll('.nav-btn').forEach(b => {
+    if(b.getAttribute('onclick').includes(id)) b.classList.add('active');
+  });
+  if(id === 'dashboard') refreshDashboard();
+  if(id === 'saisie') initSaisie();
+  if(id === 'historique') { populateHistoriqueFilters(); renderHistorique(); }
+  if(id === 'gestion') renderGestion();
 }
 
-// ────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════
 // DASHBOARD
-// ────────────────────────────────────────────────────
-
-async function refreshDashboard() {
-  const { doctors, interventions } = await loadData();
+// ════════════════════════════════════════════════════
+function refreshDashboard() {
+  const { doctors, interventions } = loadData();
   const totalCA = interventions.reduce((a, i) => a + i.total, 0);
   const totalRemun = interventions.reduce((a, i) => a + i.remun, 0);
   const totalPatients = interventions.length;
@@ -960,54 +1067,53 @@ async function refreshDashboard() {
     return;
   }
 
-  grid.innerHTML = doctors.map(doc => {
-    const docInter = interventions.filter(i => i.doctorId === doc.id || i.doctor_id === doc.id);
+  grid.innerHTML = doctors.map(docItem => {
+    const docInter = interventions.filter(i => i.doctorId === docItem.id);
     const docCA = docInter.reduce((a, i) => a + i.total, 0);
     const docRemun = docInter.reduce((a, i) => a + i.remun, 0);
-    const initials = doc.name.split(' ').map(w => w[0]).join('').slice(0,2).toUpperCase();
+    const initials = docItem.name.split(' ').map(w => w[0]).join('').slice(0,2).toUpperCase();
     return `
-      <div class="doctor-card" onclick="showDoctorDetail('${doc.id}')">
+      <div class="doctor-card" onclick="showDoctorDetail('${docItem.id}')">
         <div class="doctor-card-header">
           <div class="doctor-avatar">${initials}</div>
           <div>
-            <div class="doctor-name">${doc.name}</div>
-            <div class="doctor-specialty">${doc.specialty || 'Généraliste'}</div>
+            <div class="doctor-name">${docItem.name}</div>
+            <div class="doctor-specialty">${docItem.specialty || 'Généraliste'}</div>
           </div>
         </div>
         <div class="doctor-card-body">
           <div class="doctor-stat-row"><span class="label">Interventions</span><span class="value">${docInter.length}</span></div>
           <div class="doctor-stat-row"><span class="label">Chiffre d'Affaires</span><span class="value or">${fmt(docCA)}</span></div>
           <div class="doctor-stat-row"><span class="label">Rémunération (40%)</span><span class="value green">${fmt(docRemun)}</span></div>
-          <button class="card-action-btn" onclick="event.stopPropagation();goToSaisie('${doc.id}')">+ Nouvelle Intervention</button>
+          <button class="card-action-btn" onclick="event.stopPropagation();goToSaisie('${docItem.id}')">+ Nouvelle Intervention</button>
         </div>
       </div>`;
   }).join('');
 }
+window.refreshDashboard = refreshDashboard;
 
-function showDoctorDetail(docId) {
+window.showDoctorDetail = function(docId) {
   showPage('historique');
   setTimeout(() => {
     document.getElementById('filter-doctor').value = docId;
     renderHistorique();
-  }, 150);
+  }, 50);
 }
 
-function goToSaisie(docId) {
+window.goToSaisie = function(docId) {
   showPage('saisie');
   setTimeout(() => {
     document.getElementById('saisie-doctor-select').value = docId;
     onDoctorSelect();
-  }, 150);
+  }, 50);
 }
 
-// ────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════
 // SAISIE
-// ────────────────────────────────────────────────────
-
+// ════════════════════════════════════════════════════
 let selection = {};
 
-async function initSaisie() {
-  await loadData();
+function initSaisie() {
   selection = {};
   populateDoctorSelect('saisie-doctor-select');
   renderTariffGrid();
@@ -1015,7 +1121,7 @@ async function initSaisie() {
   document.getElementById('saisie-patient-name').value = '';
 }
 
-function onDoctorSelect() { /* noop */ }
+window.onDoctorSelect = function() {}
 
 function renderTariffGrid() {
   const grid = document.getElementById('tariff-grid');
@@ -1044,7 +1150,7 @@ function renderTariffGrid() {
   `).join('');
 }
 
-function toggleItem(id) {
+window.toggleItem = function(id) {
   if(selection[id]) {
     delete selection[id];
     document.getElementById('titem-' + id).classList.remove('selected');
@@ -1058,7 +1164,7 @@ function toggleItem(id) {
   updateRecap();
 }
 
-function changeQty(id, delta) {
+window.changeQty = function(id, delta) {
   if(!selection[id]) return;
   selection[id] = Math.max(1, selection[id] + delta);
   document.getElementById('qty-' + id).textContent = selection[id];
@@ -1084,13 +1190,14 @@ function findItem(id) {
   return null;
 }
 
-async function validerIntervention() {
+window.validerIntervention = async function() {
   const docId = document.getElementById('saisie-doctor-select').value;
   if(!docId) { showToast('Sélectionnez un médecin', 'error'); return; }
   if(!Object.keys(selection).length) { showToast('Aucune intervention sélectionnée', 'error'); return; }
 
-  const doc = localData.doctors.find(d => d.id === docId);
-  if(!doc) { showToast('Médecin introuvable', 'error'); return; }
+  const { doctors } = loadData();
+  const docItem = doctors.find(d => d.id === docId);
+  if(!docItem) { showToast('Médecin introuvable', 'error'); return; }
 
   const patient = document.getElementById('saisie-patient-name').value.trim() || 'Anonyme';
   const now = new Date();
@@ -1103,8 +1210,9 @@ async function validerIntervention() {
   });
 
   const entry = {
+    id: Date.now().toString(),
     doctorId: docId,
-    doctorName: doc.name,
+    doctorName: docItem.name,
     patient,
     date: now.toISOString(),
     lines,
@@ -1112,15 +1220,8 @@ async function validerIntervention() {
     remun: totalInter * 0.4,
   };
 
-  // Envoi à Supabase
-  const { error } = await supabase.from('interventions').insert([entry]);
-  
-  if (error) {
-    showToast("Erreur lors de la sauvegarde cloud", "error");
-    return;
-  }
-
-  showToast(`✓ Intervention validée — ${fmt(totalInter)} pour ${doc.name}`);
+  await saveIntervention(entry);
+  showToast(`✓ Intervention validée — ${fmt(totalInter)} pour ${docItem.name}`);
 
   selection = {};
   renderTariffGrid();
@@ -1129,22 +1230,22 @@ async function validerIntervention() {
   document.getElementById('saisie-doctor-select').value = '';
 }
 
-// ────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════
 // HISTORIQUE
-// ────────────────────────────────────────────────────
-
-async function populateHistoriqueFilters() {
+// ════════════════════════════════════════════════════
+function populateHistoriqueFilters() {
   populateDoctorSelect('filter-doctor', true);
 }
 
-async function renderHistorique() {
+function renderHistorique() {
+  const { interventions } = loadData();
   const docFilter = document.getElementById('filter-doctor').value;
   const catFilter = document.getElementById('filter-cat').value;
   const dateFilter = document.getElementById('filter-date').value;
 
-  let rows = localData.interventions.slice();
-  if(docFilter) rows = rows.filter(r => r.doctorId === docFilter || r.doctor_id === docFilter);
-  if(catFilter) rows = rows.filter(r => r.lines && r.lines.some(l => l.cat === catFilter));
+  let rows = interventions.slice().sort((a,b) => new Date(b.date) - new Date(a.date));
+  if(docFilter) rows = rows.filter(r => r.doctorId === docFilter);
+  if(catFilter) rows = rows.filter(r => r.lines.some(l => l.cat === catFilter));
   if(dateFilter) rows = rows.filter(r => r.date.startsWith(dateFilter));
 
   const tbody = document.getElementById('historique-tbody');
@@ -1154,11 +1255,10 @@ async function renderHistorique() {
   }
 
   tbody.innerHTML = rows.flatMap(row => {
-    if(!row.lines || !row.lines.length) return '';
     return row.lines.map((line, idx) => `
       <tr>
         ${idx === 0 ? `<td rowspan="${row.lines.length}" class="mono" style="font-size:12px;">${formatDate(row.date)}</td>
-        <td rowspan="${row.lines.length}">${row.doctorName || 'Inconnu'}</td>
+        <td rowspan="${row.lines.length}">${row.doctorName}</td>
         <td rowspan="${row.lines.length}" style="color:var(--text-dim)">${row.patient}</td>` : ''}
         <td><span class="badge ${CAT_BADGE[line.cat] || ''}">${line.cat}</span></td>
         <td>${line.name}</td>
@@ -1169,117 +1269,105 @@ async function renderHistorique() {
     `);
   }).join('');
 }
+window.renderHistorique = renderHistorique;
 
-function clearFilters() {
+window.clearFilters = function() {
   document.getElementById('filter-doctor').value = '';
   document.getElementById('filter-cat').value = '';
   document.getElementById('filter-date').value = '';
   renderHistorique();
 }
 
-function exportCSV() {
-  if(!localData.interventions.length) { showToast('Aucune donnée à exporter', 'error'); return; }
+window.exportCSV = function() {
+  const { interventions } = loadData();
+  if(!interventions.length) { showToast('Aucune donnée à exporter', 'error'); return; }
   let csv = 'Date,Médecin,Patient,Catégorie,Intervention,Quantité,Prix unitaire,Total,Rémunération\n';
-  localData.interventions.forEach(row => {
-    if(row.lines) {
-      row.lines.forEach(line => {
-        csv += `"${formatDate(row.date)}","${row.doctorName}","${row.patient}","${line.cat}","${line.name}","${line.qty}","${line.prix}","${row.total}","${row.remun}"\n`;
-      });
-    }
+  interventions.forEach(row => {
+    row.lines.forEach(line => {
+      csv += `"${formatDate(row.date)}","${row.doctorName}","${row.patient}","${line.cat}","${line.name}","${line.qty}","${line.prix}","${row.total}","${row.remun}"\n`;
+    });
   });
   const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a'); a.href = url; a.download = 'historique_chn.csv'; a.click();
 }
 
-// ────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════
 // GESTION
-// ────────────────────────────────────────────────────
-
-async function renderGestion() {
+// ════════════════════════════════════════════════════
+function renderGestion() {
+  const { doctors } = loadData();
   const list = document.getElementById('gestion-doctor-list');
 
-  if(!localData.doctors.length) {
+  if(!doctors.length) {
     list.innerHTML = `<div class="empty-state" style="padding:30px 0;"><div class="icon">👨‍⚕️</div><p>Aucun médecin pour l'instant.</p></div>`;
     return;
   }
 
-  list.innerHTML = localData.doctors.map(doc => `
+  list.innerHTML = doctors.map(docItem => `
     <div class="doctor-list-item">
       <div>
-        <div class="doctor-list-name">${doc.name}</div>
-        <div class="doctor-list-spec">${doc.specialty || '—'}</div>
+        <div class="doctor-list-name">${docItem.name}</div>
+        <div class="doctor-list-spec">${docItem.specialty || '—'}</div>
       </div>
-      <button class="btn btn-danger" style="padding:7px 14px;font-size:12px;" onclick="removeDoctor('${doc.id}')">Supprimer</button>
+      <button class="btn btn-danger" style="padding:7px 14px;font-size:12px;" onclick="removeDoctor('${docItem.id}')">Supprimer</button>
     </div>
   `).join('');
 }
+window.renderGestion = renderGestion;
 
-async function addDoctor() {
+window.addDoctor = async function() {
   const name = document.getElementById('new-doctor-name').value.trim();
-  const specialty = document.getElementById('new-doctor-spec').value.trim();
+  const spec = document.getElementById('new-doctor-spec').value.trim();
   if(!name) { showToast('Entrez un nom de médecin', 'error'); return; }
-
-  const newDoc = { name, specialty };
-  
-  const { error } = await supabase.from('doctors').insert([newDoc]);
-  if(error) { showToast('Erreur lors de l\'ajout cloud', 'error'); return; }
-
+  const newDoc = { id: 'doc_' + Date.now(), name, specialty: spec };
+  await saveDoctors_add(newDoc);
   document.getElementById('new-doctor-name').value = '';
   document.getElementById('new-doctor-spec').value = '';
   showToast(`✓ ${name} ajouté`);
-  await loadData();
-  await renderGestion();
 }
 
-function removeDoctor(id) {
-  const doc = localData.doctors.find(d => d.id === id);
+window.removeDoctor = function(id) {
+  const { doctors } = loadData();
+  const docItem = doctors.find(d => d.id === id);
   openModal(
-    `Supprimer ${doc?.name || 'ce médecin'}`,
-    'Ses interventions resteront dans l\'historique mais le médecin sera retiré.',
+    `Supprimer ${docItem?.name || 'ce médecin'}`,
+    "Ses interventions resteront dans l'historique mais le médecin sera retiré.",
     async () => {
-      const { error } = await supabase.from('doctors').delete().eq('id', id);
-      if(error) { showToast('Erreur de suppression cloud', 'error'); return; }
+      await saveDoctors_remove(id);
       showToast('Médecin supprimé');
-      await loadData();
-      await renderGestion();
     }
   );
 }
 
-function confirmReset(type) {
+window.confirmReset = function(type) {
   if(type === 'interventions') {
-    openModal('Effacer tout l\'historique', 'Toutes les interventions cloud seront définitivement supprimées.', async () => {
-      const { error } = await supabase.from('interventions').delete().neq('id', 0); // Supprime tout
-      if(error) { showToast('Erreur cloud', 'error'); return; }
+    openModal('Effacer tout l\'historique', 'Toutes les interventions seront définitivement supprimées.', async () => {
+      await clearInterventions();
       showToast('Historique effacé');
-      await loadData();
     });
   } else {
     openModal('Réinitialisation Complète', 'TOUS les médecins et TOUTES les interventions seront supprimés.', async () => {
-      await supabase.from('doctors').delete().neq('id', 0);
-      await supabase.from('interventions').delete().neq('id', 0);
+      await clearAll();
       showToast('Réinitialisation effectuée');
-      await loadData();
-      await renderGestion();
     });
   }
 }
 
-// ────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════
 // HELPERS
-// ────────────────────────────────────────────────────
-
+// ════════════════════════════════════════════════════
 function populateDoctorSelect(selectId, withAllOption = false) {
+  const { doctors } = loadData();
   const sel = document.getElementById(selectId);
   if(!sel) return;
   const currentVal = sel.value;
   sel.innerHTML = withAllOption
     ? '<option value="">Tous les médecins</option>'
     : '<option value="">— Sélectionner un médecin —</option>';
-  localData.doctors.forEach(doc => {
+  doctors.forEach(docItem => {
     const opt = document.createElement('option');
-    opt.value = doc.id; opt.textContent = doc.name;
+    opt.value = docItem.id; opt.textContent = docItem.name;
     sel.appendChild(opt);
   });
   if(currentVal) sel.value = currentVal;
@@ -1299,11 +1387,11 @@ function showToast(msg, type = 'success') {
   t.classList.add('show');
   setTimeout(() => t.classList.remove('show'), 3200);
 }
+window.showToast = showToast;
 
-// ────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════
 // MODAL
-// ────────────────────────────────────────────────────
-
+// ════════════════════════════════════════════════════
 let pendingAction = null;
 
 function openModal(title, desc, onConfirm) {
@@ -1312,8 +1400,9 @@ function openModal(title, desc, onConfirm) {
   pendingAction = onConfirm;
   document.getElementById('modal-overlay').classList.add('open');
 }
+window.openModal = openModal;
 
-function closeModal() {
+window.closeModal = function() {
   document.getElementById('modal-overlay').classList.remove('open');
   pendingAction = null;
 }
@@ -1327,13 +1416,13 @@ document.getElementById('modal-overlay').addEventListener('click', e => {
   if(e.target === document.getElementById('modal-overlay')) closeModal();
 });
 
-// ────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════
 // INIT
-// ────────────────────────────────────────────────────
-(async () => {
-  await loadData();
-  await refreshDashboard();
-})();
+// ════════════════════════════════════════════════════
+refreshDashboard();
+renderTariffGrid();
+document.getElementById('current-date').textContent = new Date().toLocaleDateString('fr-FR', {weekday:'long', year:'numeric', month:'long', day:'numeric'});
+
 </script>
 </body>
 </html>
